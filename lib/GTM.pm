@@ -3,7 +3,7 @@
 
 package GTM;
 
-our $VERSION = "0.1";
+our $VERSION = "0.2";
 
 use common::sense;
 
@@ -13,6 +13,7 @@ use Gtk2::SimpleMenu ();
 use AnyEvent;
 use AnyEvent::Util;
 use File::HomeDir ();
+use POSIX qw(setsid _exit);
 
 =head1 NAME
 
@@ -56,6 +57,17 @@ sub load_prefs () {
       }
    }
 
+}
+
+sub run_console () {
+    local %ENV = (%ENV, %override);
+    my $pid = fork;
+    return unless $pid == 0;
+    setsid;
+    exec ("rxvt", "-e", "$ENV{gtm_dist}/mumps", "-direct");
+    exec ("urxvt", "-e", "$ENV{gtm_dist}/mumps", "-direct");
+    exec ("xterm", "-e", "$ENV{gtm_dist}/mumps", "-direct");
+    _exit (0);
 }
 
 sub ident_file ($) {
@@ -406,6 +418,11 @@ my $menu_tree = [
                                                       accelerator => 'F3',
                                                     },
  
+                                           Separator => { item_type => '<Separator>',
+                                                        },
+                                           "_Console" => { callback => sub { run_console; },
+                                                           accelerator => '<Alt>C',
+                                                         },
                                            Separator => { item_type => '<Separator>',
                                                         },
                                            E_xit => { callback => sub { main_quit Gtk2; },

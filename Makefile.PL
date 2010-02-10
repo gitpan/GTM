@@ -11,9 +11,9 @@ WriteMakefile(
 
     PREREQ_PM   => {
                     Gtk2                => 1.043,
-                    AnyEvent            => 5.23,
-                    'File::HomeDir'     => 0.86,
-                    'common::sense'     => 2.01,
+                    AnyEvent            => 5.24,
+                    'File::HomeDir'     => 0.89,
+                    'common::sense'     => 3.0,
                    },
     EXE_FILES   => [ qw(bin/gtm) ],
     PM          => { 
