@@ -1,0 +1,8 @@
+#! /usr/bin/perl
+
+use GTM;
+
+my $w = new GTM;
+$w->show_all;
+main Gtk2;
+
