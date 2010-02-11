@@ -1,5 +1,6 @@
 #! /usr/bin/perl
 
+use common::sense;
 use GTM;
 
 my $w = new GTM;

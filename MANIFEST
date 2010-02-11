@@ -10,5 +10,6 @@ COPYING.GNU
 COPYING.Artistic
 images/ampel-red.png
 images/ampel-green.png
+images/ampel-off.png
 
 META.yml                                 Module meta-data (added by MakeMaker)

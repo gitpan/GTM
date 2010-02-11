@@ -1,7 +1,5 @@
 use 5.010000;
 use ExtUtils::MakeMaker;
-# See lib/ExtUtils/MakeMaker.pm for details of how to influence
-# the contents of the Makefile that is written.
 WriteMakefile(
     dist        => {
                     PREOP       => 'chmod -R u=rwX,go=rX . ;',
@@ -20,6 +18,7 @@ WriteMakefile(
           'lib/GTM.pm'         => '$(INST_LIBDIR)/GTM.pm',
           'images/ampel-red.png'   => '$(INST_LIBDIR)/GTM/images/ampel-red.png',
           'images/ampel-green.png' => '$(INST_LIBDIR)/GTM/images/ampel-green.png',
+          'images/ampel-off.png' => '$(INST_LIBDIR)/GTM/images/ampel-off.png',
 
                    },
     NAME              => 'GTM',
