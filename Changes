@@ -1,3 +1,7 @@
+0.4 Fri Feb 12 14:08:49 MET 2010
+   -code cleanup
+   -implemented a global selector
+
 0.3 Thu Feb 11 12:39:25 MET 2010
    - traffic light blinks if busy 
    - fixed a lock issue (missing callback)
