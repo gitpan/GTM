@@ -16,6 +16,7 @@ WriteMakefile(
     EXE_FILES   => [ qw(bin/gtm) ],
     PM          => { 
           'lib/GTM.pm'         => '$(INST_LIBDIR)/GTM.pm',
+          'lib/GTM/Run.pm'         => '$(INST_LIBDIR)/GTM/Run.pm',
           'images/ampel-red.png'   => '$(INST_LIBDIR)/GTM/images/ampel-red.png',
           'images/ampel-green.png' => '$(INST_LIBDIR)/GTM/images/ampel-green.png',
           'images/ampel-off.png' => '$(INST_LIBDIR)/GTM/images/ampel-off.png',

@@ -4,6 +4,7 @@ MANIFEST
 README
 t/000-load.t
 lib/GTM.pm
+lib/GTM/Run.pm
 bin/gtm
 COPYING
 COPYING.GNU

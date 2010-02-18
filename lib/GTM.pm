@@ -1,8 +1,7 @@
-#! /usr/bin/perl
 
 package GTM;
 
-our $VERSION = "0.4";
+our $VERSION = "0.5";
 
 use common::sense;
 
@@ -20,15 +19,35 @@ GTM - A gui frontend for the GT.M database
 
 =cut
 
+BEGIN {
+    use base 'Exporter';
+    our @EXPORT_OK = qw(set_busy output %override);
+    our @EXPORT    = ();
+}
+
+use GTM::Run ();
+
 our %override;
 
 our ($gtm_version, $gtm_utf8);
-our @gtm_variables =
-  (qw/gtm_dist gtmroutines gtmgbldir gtm_log gtm_chset gtm_icu_version/);
+our @gtm_variables = (qw/gtm_dist gtmroutines gtmgbldir gtm_log gtm_chset gtm_icu_version/);
 
 my ($win_width, $win_height) = (960, 600);
 
 my $main_window;
+
+sub error_dialog ($@) {
+    my ($parent, @data) = @_;
+    my $dialog = new Gtk2::Dialog ("Program Error, \$\@ exception raised.", $parent, 'modal', OK => 42);
+    $dialog->set_default_response (42);
+    my $sa = new_scrolled_textarea ();
+    $sa->set_size_request (660, 300);
+    scrollarea_output ($sa, join "", @data);
+    $dialog->vbox->add ($sa);
+    $dialog->show_all;
+    $dialog->run;
+    $dialog->destroy;
+}
 
 sub new_scrolled_textarea () {
     my $tv = new Gtk2::TextView;
@@ -229,10 +248,15 @@ sub gsel_pattern ($$$) {
         for my $g (@$ga) {
             $g{$g} = $sel if $g ge $from && $g le $to;
         }
-    }
-    else {
+    } elsif ($pat =~ m|^/|) {
+        if ($pat =~ m|^/invert|) {
+            $g{$_} = 1 - $g{$_} for (keys %g);
+        }
+
+    } else {
         $pat =~ s/\?/\./sg;
         $pat =~ s/\*/\.\*\?/sg;
+        $pat =~ s/[+\{]//sg;
         $pat = "^$pat\$";
         eval {
             for my $g (@$ga)
@@ -267,13 +291,13 @@ sub gtm_gsel1 (&) {
 }
 
 sub gtm_gsel ($;$$) {
-    my ($parent, $cb, $glb) = shift;
-    my $dialog =
-      new Gtk2::Dialog (
-                        "Global selector", $parent, 'modal',
-                        'gtk-cancel' => 0,
-                        OK           => 42
-                       );
+    my ($parent, $cb, $glb) = @_;
+    my $on_entry;
+    my $dialog = new Gtk2::Dialog (
+                                   "Global selector", $parent, 'modal',
+                                   'gtk-cancel' => 0,
+                                   OK           => 42
+                                  );
 
     my ($f0, $f1) = (new Gtk2::Frame (), new Gtk2::Frame ("Selected Globals"));
     $f0->set_border_width (5);
@@ -281,8 +305,8 @@ sub gtm_gsel ($;$$) {
     my ($s0, $s1) = (new_scrolled_textarea(), new_scrolled_textarea());
     $s0->set_size_request (660, 300);
     $s1->set_size_request (660, 300);
-    my @globals = @$glb;
-    my @selected;
+    my @globals;
+    my @selected = @$glb;
     gtm_gsel1 (
         sub {
             @globals = @_;
@@ -300,6 +324,7 @@ sub gtm_gsel ($;$$) {
     my $e  = new Gtk2::Entry;
     $e->signal_connect (
         'activate' => sub {
+            $dialog->response (42) unless (length $e->get_text);
             gsel_pattern (\@globals, \@selected, $e->get_text);
             scrollarea_clear ($s1);
             scrollarea_output ($s1, nice_globals (@selected));
@@ -308,9 +333,12 @@ sub gtm_gsel ($;$$) {
         }
     );
 
-    my $b = new Gtk2::Button ("Global ^");
+    if (!$on_entry++ && @selected) {
+        scrollarea_output ($s1, nice_globals (@selected)) if @selected;
+        $f1->set_label (@selected . " globals selected");
+    }
 
-    # $b->signal_connect ('clicked' => sub { scrollarea_clear ($s0);  });
+    my $b = new Gtk2::Button ("Global ^");
 
     $hb->pack_start ($b, 0, 0, 0);
     $hb->add ($e);
@@ -321,9 +349,139 @@ sub gtm_gsel ($;$$) {
     $dialog->set_focus ($e);
     $dialog->show_all;
     if ($dialog->run == 42) {
+        @$glb = @selected if $glb;
         $cb->(\@selected) if $cb;
     }
     $dialog->destroy;
+}
+
+sub gtm_go_run ($$$$) {
+    my ($file, $mode, $hc, $globals) = @_;
+
+    #$override{gtm_icu_version} = "";
+    my $h = new GTM::Run ([qw[mumps -direct]]);
+    $h->debug (0);
+    $mode = "ZWR" unless $mode eq "GO";
+    $h->expect (
+        qr/GTM\>/,
+        qr/^%.*/m,
+        sub {
+            die $_[1] if $_[2];
+            shift->write ("D ^\%GO\n");
+        },
+
+        qr/ZGBLDIRACC/m,
+        qr/^Global \^/m,
+        sub {
+            my ($hdl, $data, $idx) = @_;
+            unless ($idx) {
+                $hdl->write ("\nHalt\n");
+                die "global selector $_[1]";
+            }
+            $hdl->write ("$_\n") for (@$globals);
+            $hdl->write ("\n");
+        },
+
+        qr/^No globals selected/m,
+        qr/^Header Label:/m,
+        sub {
+            my ($hdl, $data, $idx) = @_;
+            if (!$idx) {
+                $hdl->write ("\nHalt\n");
+                die "no globals selected: $_[1]";
+            }
+            $hdl->write ("$hc\n");
+        },
+
+        qr/ZWR:/, sub { shift->write ("$mode\n"); },
+
+        qr/<terminal>/,
+        sub { shift->write ("$file\n"); },
+               );
+
+    $h->expect (
+        qr/<terminal>/,
+        qr/GTM>/,
+        qr/.+(?=GTM>)/ms,
+        sub {
+            my ($hdl, $data, $idx) = @_;
+            if (!$idx) {
+                $hdl->write ("^\n\nHalt\n");
+                die "can't open file \"$file\"";
+            }
+            if ($idx == 2) {
+                output ($data);
+            } else {
+                $hdl->write ("\nHalt\n");
+                $hdl->close;
+                return;
+            }
+        },
+    );
+
+}
+
+sub gtm_go ($) {
+    my $parent = shift;
+    my @g      = ();
+    my $dialog = new Gtk2::Dialog (
+                                   "Global Output (\%GO)", $parent, 'modal',
+                                   'gtk-cancel' => 0,
+                                   OK           => 42
+                                  );
+    $dialog->set_default_response (42);
+
+    my $gsel = new Gtk2::Button ("Global Selector");
+    $gsel->signal_connect (
+        clicked => sub {
+            gtm_gsel (
+                $dialog,
+                sub {
+                    $gsel->set_label (sprintf "Global Selector - %d Globals selected", scalar @{$_[0]});
+                },
+                \@g
+                     );
+        }
+    );
+    my $fe = new Gtk2::Entry;
+    my $prog = new Gtk2::Button ("File Selector");
+    $prog->signal_connect (
+        clicked => sub {
+            gtm_file_chooser ("Select output file", $dialog, "save", sub { $fe->set_text ($_[0]); });
+        }
+    );
+    my $box = new_text Gtk2::ComboBox;
+    my $hc  = new Gtk2::Entry;
+    $box->append_text ($_) for (qw/ZWR GO/);
+    $box->set_active (0);
+
+    my $hb0 = new Gtk2::HBox;
+    $hb0->add ($fe);
+    $hb0->add ($prog);
+    my $hb1 = new Gtk2::HBox;
+    my $l = new Gtk2::Label ("Header Label: ");
+    $hb1->add ($l);
+    $hb1->add ($hc);
+
+    $dialog->vbox->add ($gsel);
+    $dialog->vbox->add ($hb0);
+    $dialog->vbox->add ($box);
+    $dialog->vbox->add ($hb1);
+
+    $dialog->show_all;
+    if ($dialog->run == 42) {
+        my $hc   = $hc->get_text;
+        my $file = $fe->get_text;
+        my $mode = $box->get_active_text;
+
+        if (@g && length ($file)) {
+            eval { gtm_go_run ($file, $mode, $hc, \@g); };
+            error_dialog ($dialog, $@) if $@;
+        }
+
+    }
+    $dialog->destroy;
+
 }
 
 sub gtm_backup () {
@@ -413,12 +571,11 @@ sub gtm_rr ($$) {
 
 sub gtm_routine_restore () {
 
-    my $dialog =
-      new Gtk2::Dialog (
-                        "Routine restore", $main_window, 'modal',
-                        'gtk-cancel' => 0,
-                        OK           => 42
-                       );
+    my $dialog = new Gtk2::Dialog (
+                                   "Routine restore", $main_window, 'modal',
+                                   'gtk-cancel' => 0,
+                                   OK           => 42
+                                  );
     $dialog->set_default_response (42);
     my $h0 = new Gtk2::HBox;
     my $h1 = new Gtk2::HBox;
@@ -447,10 +604,7 @@ sub gtm_routine_restore () {
     );
     $b1->signal_connect (
         "clicked" => sub {
-            gtm_file_chooser ("Select a target directory",
-                              $dialog, 'select-folder',
-                              sub { $e1->set_text ($_[0]); },
-                             );
+            gtm_file_chooser ("Select a target directory", $dialog, 'select-folder', sub { $e1->set_text ($_[0]); },);
         }
     );
     $h0->add ($e0);
@@ -511,12 +665,11 @@ sub gtm_gr ($) {
 }
 
 sub gtm_global_restore () {
-    my $dialog =
-      new Gtk2::Dialog (
-                        "Global restore", $main_window, 'modal',
-                        'gtk-cancel' => 0,
-                        OK           => 42
-                       );
+    my $dialog = new Gtk2::Dialog (
+                                   "Global restore", $main_window, 'modal',
+                                   'gtk-cancel' => 0,
+                                   OK           => 42
+                                  );
     $dialog->set_default_response (42);
     my $h0 = new Gtk2::HBox;
     my $e0 = new Gtk2::Entry;
@@ -554,8 +707,7 @@ sub about_dialog () {
         $main_window,
         "program-name" => 'GTM',
         authors        => [ 'Stefan Traby', ],
-        license =>
-"This package is distributed under the same license as perl itself, i.e.\n"
+        license        => "This package is distributed under the same license as perl itself, i.e.\n"
           . "either the Artistic License (COPYING.Artistic) or the GPLv2 (COPYING.GNU).",
         copyright => "(c) 2010 by St.Traby <stefan\@hello-penguin.com>",
         website   => 'http://oesiman.de/gt.m/',
@@ -568,12 +720,11 @@ sub about_dialog () {
 }
 
 sub edit_environment (@) {
-    my $dialog =
-      new Gtk2::Dialog (
-                        "Customize environment", $main_window, 'modal',
-                        'gtk-cancel' => 0,
-                        OK           => 42
-                       );
+    my $dialog = new Gtk2::Dialog (
+                                   "Customize environment", $main_window, 'modal',
+                                   'gtk-cancel' => 0,
+                                   OK           => 42
+                                  );
     $dialog->set_default_response (42);
     my @vars = @_;
     my $cnt  = @vars;
@@ -604,8 +755,7 @@ sub edit_environment (@) {
         my $v = $ENV{$vars[$i]};
         unless (exists $ENV{$vars[$i]}) {
             $v = '<<<undef>>>';
-            $val->modify_base ('GTK_STATE_NORMAL',
-                               new Gtk2::Gdk::Color (65535, 65535, 1000));
+            $val->modify_base ('GTK_STATE_NORMAL', new Gtk2::Gdk::Color (65535, 65535, 1000));
         }
         $val->set_text ($v);
         $t->attach_defaults ($val, 1, 2, $i + 1, $i + 2);
@@ -646,8 +796,7 @@ my $menu_tree = [
                                   callback    => sub { gtm_global_restore; },
                                   accelerator => 'F3',
                                  },
-            "G_lobal Selector (DUMMY)" =>
-              {callback => sub { gtm_gsel ($main_window); },},
+            'Global _Output (%GO)' => {callback => sub { gtm_go ($main_window); },},
 
             Separator  => {item_type => '<Separator>',},
             "_Console" => {
@@ -663,15 +812,13 @@ my $menu_tree = [
              },
 
     _Variables => {
-                 item_type => '<Branch>',
-                 children  => [
-                     '_Edit all variables' =>
-                       {callback => sub { edit_environment (@gtm_variables) },},
-                     '_Clear all overrides' =>
-                       {callback => sub { %override = (); save_prefs(); },},
-                     Separator => {item_type => '<Separator>',},
-                 ],
-    },
+                   item_type => '<Branch>',
+                   children  => [
+                       '_Edit all variables' => {callback => sub { edit_environment (@gtm_variables) },},
+                       '_Clear all overrides' => {callback => sub { %override = (); save_prefs(); },},
+                       Separator => {item_type => '<Separator>',},
+                               ],
+                  },
 
     _Database => {
         item_type => '<Branch>',
@@ -680,23 +827,31 @@ my $menu_tree = [
                                    callback => sub { gtm_integ (); }
                                   },
             '_Rundown' => {
-                           callback => sub { gtm_rundown (); },
-                           accelerator => '<Alt>R'
+                callback => sub {
+                    gtm_rundown ();
+                },
+                accelerator => '<Alt>R'
                           },
             Separator          => {item_type => '<Separator>',},
             '_Freeze Database' => {
-                                   callback => sub { gtm_freeze (1); }
-                                  },
+                callback => sub {
+                    gtm_freeze (1);
+                  }
+            },
             '_Thaw Database' => {
-                                 callback => sub { gtm_freeze (0); }
-                                },
+                callback => sub {
+                    gtm_freeze (0);
+                  }
+            },
             Separator          => {item_type => '<Separator>',},
             '_Backup Database' => {
-                                   callback => sub { gtm_backup(); }
-                                  },
+                callback => sub {
+                    gtm_backup();
+                  }
+            },
 
-                    ],
-                 },
+        ],
+    },
 
     _Locks => {
         item_type => '<Branch>',
@@ -739,7 +894,7 @@ for my $x (@gtm_variables) {
     my $y = $x;
     $y =~ s/_/__/g;
     push @{$menu_tree->[3]{children}}, $y => {
-                                      callback => sub { edit_environment ($x); }
+                                              callback => sub { edit_environment ($x); }
                                              };
 }
 
@@ -764,8 +919,7 @@ sub gtm_run ($@) {
     my ($cmd, %rest) = @_;
     if (ref $cmd eq "ARRAY") {
         $cmd->[0] = "$ENV{gtm_dist}/$cmd->[0]" unless $cmd->[0] =~ m@^/@;
-    }
-    else {
+    } else {
         $cmd = "$ENV{gtm_dist}/$cmd" unless $cmd =~ m@^/@;
     }
     output "#" x 78 . "\n";
@@ -805,8 +959,7 @@ sub get_gtm_version () {
                 $gtm_version = $1;
                 $gtm_utf8    = 1;
                 $gtm_utf8    = 0 if $2 eq "M";
-                $main_window->set_title (
-                           "GT.M GUI v$VERSION ($gtm_version) UTF-8=$gtm_utf8");
+                $main_window->set_title ("GT.M GUI v$VERSION ($gtm_version) UTF-8=$gtm_utf8");
             }
         }
     );
@@ -825,8 +978,7 @@ sub gtm_rundown () {
 sub gtm_freeze ($) {
     if ($_[0]) {
         gtm_run_out ([qw[ mupip freeze -on * ]]);
-    }
-    else {
+    } else {
         gtm_run_out ([qw[ mupip freeze -off * ]]);
     }
 }
@@ -834,8 +986,7 @@ sub gtm_freeze ($) {
 sub gtm_journal ($) {
     if ($_[0]) {
         gtm_run_out ([qw[ mupip SET -JOURNAL=ON,BEFORE_IMAGES -REGION * ]]);
-    }
-    else {
+    } else {
         gtm_run_out ([qw[ mupip SET -JOURNAL=OFF -REGION * ]]);
     }
 }
@@ -881,8 +1032,7 @@ sub update_locks ($) {
 
 sub gtm_locks() {
     @buttons = ();
-    my $dialog =
-      new Gtk2::Dialog ("Manage Locks", $main_window, 'modal', OK => 42);
+    my $dialog = new Gtk2::Dialog ("Manage Locks", $main_window, 'modal', OK => 42);
     $dialog->set_default_response (42);
     my $button = new Gtk2::Button ("_Refresh");
     my $frame  = new Gtk2::Frame  ("Locks held");
@@ -922,8 +1072,7 @@ our $button;
 
 sub new () {
     $main_window = new Gtk2::Window ('toplevel');
-    $main_window->signal_connect (destroy => sub { save_prefs; main_quit Gtk2; }
-    );
+    $main_window->signal_connect (destroy => sub { save_prefs; main_quit Gtk2; });
     $main_window->signal_connect (
         size_allocate => sub {
             ($win_height, $win_width) = ($_[1]->height, $_[1]->width);
@@ -958,8 +1107,7 @@ sub set_busy ($) {
     if ($busy == 0) {
         undef $timer;
         $button->set_image ($green);
-    }
-    else {
+    } else {
         $counter = 0;
         $timer = AnyEvent->timer (
             after    => 0,
@@ -972,6 +1120,17 @@ sub set_busy ($) {
     $was_busy = $busy;
 
 }
+
+=head1 SEE ALSO
+
+L<GTM::Run>
+
+=head1 AUTHOR
+
+   Stefan Traby <stefan@hello-penguin.com>
+   http://oesiman.de/gt.m/
+
+=cut
 
 1;
 
