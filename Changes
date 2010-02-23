@@ -1,4 +1,7 @@
-   
+0.6 Tue Feb 23 21:20:55 MET 2010
+   - added win_size to track the size of windows 
+   - make test works now without DISPLAY
+
 0.5 Thu Feb 18 09:22:42 MET 2010
    - added Global Output (%GO)
    - added GTM::Run

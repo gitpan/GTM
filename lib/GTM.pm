@@ -1,27 +1,40 @@
 
 package GTM;
 
-our $VERSION = "0.5";
+our $VERSION = "0.6";
 
 use common::sense;
 
 use utf8;
-use Gtk2 -init;
+use Gtk2;
 use Gtk2::SimpleMenu ();
 use AnyEvent;
 use AnyEvent::Util;
-use File::HomeDir ();
+use File::HomeDir       ();
+use Gtk2::Ex::PodViewer ();
 use POSIX qw(setsid _exit);
 
 =head1 NAME
 
 GTM - A gui frontend for the GT.M database
 
+=head1 SYNOPSIS
+
+   gtm 
+
+run the gtm frontend
+
+=head1 FILES
+
+   ~/.gtmrc
+
+preferences (you can source it).
+
 =cut
 
 BEGIN {
     use base 'Exporter';
-    our @EXPORT_OK = qw(set_busy output %override);
+    our @EXPORT_OK = qw(set_busy output %override save_prefs);
     our @EXPORT    = ();
 }
 
@@ -32,13 +45,30 @@ our %override;
 our ($gtm_version, $gtm_utf8);
 our @gtm_variables = (qw/gtm_dist gtmroutines gtmgbldir gtm_log gtm_chset gtm_icu_version/);
 
-my ($win_width, $win_height) = (960, 600);
+our %win_size;
+
+sub win_size ($$;$$) {
+    my ($w, $n, $x, $y) = @_;
+
+    unless (exists $win_size{$n}) {
+        $win_size{$n} = [ $x || 960, $y || 600 ];
+
+    }
+    $w->signal_connect (
+        size_allocate => sub {
+            $win_size{$n} = [ $_[1]->width, $_[1]->height ];
+        }
+    );
+    $w->resize (@{$win_size{$n}});
+
+}
 
 my $main_window;
 
 sub error_dialog ($@) {
     my ($parent, @data) = @_;
     my $dialog = new Gtk2::Dialog ("Program Error, \$\@ exception raised.", $parent, 'modal', OK => 42);
+    win_size ($dialog, "error_dialog", 670, 320);
     $dialog->set_default_response (42);
     my $sa = new_scrolled_textarea ();
     $sa->set_size_request (660, 300);
@@ -47,6 +77,21 @@ sub error_dialog ($@) {
     $dialog->show_all;
     $dialog->run;
     $dialog->destroy;
+}
+
+sub gtm_doc ($$) {
+    my ($parent, $file) = @_;
+    my $dialog = new Gtk2::Dialog ("Documentation", $parent, 'modal', OK => 42);
+    $dialog->set_default_response (42);
+    my $pod = new Gtk2::Ex::PodViewer;
+    my $file = findfile ("GTM/$file");
+    $pod->load ($file);
+    $pod->set_size_request (660, 620);
+    $dialog->vbox->add ($pod);
+    $dialog->show_all;
+    $dialog->run;
+    $dialog->destroy;
+
 }
 
 sub new_scrolled_textarea () {
@@ -89,7 +134,11 @@ my $rcfile = my_home File::HomeDir . "/.gtmrc";
 sub save_prefs () {
     open my $fh, ">", $rcfile
       or do { warn "can't create '$rcfile': $!"; return; };
-    print $fh "# w=$win_width h=$win_height\n";
+
+    while (my ($k, $v) = each %win_size) {
+        print $fh "# win=$k w=$v->[0] h=$v->[1]\n";
+    }
+
     while (my ($k, $v) = each %override) {
         $v =~ s/"/\\"/g;
         print $fh "$k=\"$v\"\nexport $k\n\n";
@@ -100,8 +149,9 @@ sub load_prefs () {
     open my $fh, "<", $rcfile
       or do { warn "can't open '$rcfile': $!"; return; };
     while (my $line = <$fh>) {
-        if ($line =~ /^#\s+w=(\d+)\s+h=(\d+)$/) {
-            ($win_width, $win_height) = ($1, $2);
+        if ($line =~ /^#\s+win=(\w+)\s+w=(\d+)\s+h=(\d+)$/) {
+            my ($window, $win_width, $win_height) = ($1, $2, $3);
+            $win_size{$window} = [ $win_width, $win_height ];
         }
         if ($line =~ /^(gtm\w+)=\"(.*)\"$/) {
             my ($k, $v) = ($1, $2);
@@ -298,7 +348,7 @@ sub gtm_gsel ($;$$) {
                                    'gtk-cancel' => 0,
                                    OK           => 42
                                   );
-
+    win_size ($dialog, "global_selector", 680, 320);
     my ($f0, $f1) = (new Gtk2::Frame (), new Gtk2::Frame ("Selected Globals"));
     $f0->set_border_width (5);
     $f1->set_border_width (5);
@@ -339,6 +389,7 @@ sub gtm_gsel ($;$$) {
     }
 
     my $b = new Gtk2::Button ("Global ^");
+    $b->signal_connect ('clicked' => sub { gtm_doc ($dialog, "global-selector.pod"); });
 
     $hb->pack_start ($b, 0, 0, 0);
     $hb->add ($e);
@@ -898,14 +949,12 @@ for my $x (@gtm_variables) {
                                              };
 }
 
-my $menu = new Gtk2::SimpleMenu (menu_tree => $menu_tree);
-
 #$buffer->signal_connect (insert_text => sub {
 #                 $tv->scroll_to_mark($end_mark, 0, 1, 0, 1);
 #       }
 #       );
 
-my $main_scroll = new_scrolled_textarea();
+my $main_scroll;
 
 sub output {
     my $lines = join "", @_;
@@ -1033,6 +1082,7 @@ sub update_locks ($) {
 sub gtm_locks() {
     @buttons = ();
     my $dialog = new Gtk2::Dialog ("Manage Locks", $main_window, 'modal', OK => 42);
+    win_size ($dialog, "manage_locks", 200, 200);
     $dialog->set_default_response (42);
     my $button = new Gtk2::Button ("_Refresh");
     my $frame  = new Gtk2::Frame  ("Locks held");
@@ -1049,8 +1099,6 @@ sub gtm_locks() {
     $dialog->destroy;
 }
 
-output ("startup\n");
-
 $SIG{__WARN__} = sub { output @_; };
 
 sub findfile {
@@ -1063,7 +1111,7 @@ sub findfile {
                 next file;
             }
         }
-        die "$_: file not found in \@INC\n";
+        die "$_: file not found in \@INC\nINC=" . join ("\n", @INC);
     }
     wantarray ? @files : $files[0];
 }
@@ -1071,13 +1119,11 @@ sub findfile {
 our $button;
 
 sub new () {
+    my $menu = new Gtk2::SimpleMenu (menu_tree => $menu_tree);
+    $main_scroll = new_scrolled_textarea();
     $main_window = new Gtk2::Window ('toplevel');
-    $main_window->signal_connect (destroy => sub { save_prefs; main_quit Gtk2; });
-    $main_window->signal_connect (
-        size_allocate => sub {
-            ($win_height, $win_width) = ($_[1]->height, $_[1]->width);
-        }
-    );
+    $main_window->signal_connect (destroy => sub { main_quit Gtk2; });
+    win_size ($main_window, "main_window", 960, 600);
     my $v = new Gtk2::VBox;
     $v->pack_start ($menu->{widget}, 0, 0, 0);
     $v->pack_start ($button,         0, 0, 0);
@@ -1088,7 +1134,6 @@ sub new () {
     load_prefs;
     set_busy (0);
     get_gtm_version();
-    $main_window->resize ($win_width, $win_height);
     $main_window;
 }
 
